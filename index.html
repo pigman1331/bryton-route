@@ -130,6 +130,16 @@ details[open] summary{margin-bottom:8px}
           <li>點數不夠：分段分享，一行一個貼上；或讀取後直接在地圖上點選加點</li>
         </ol>
       </details>
+      <details id="bmBox">
+        <summary>電腦版：一鍵對齊 Google 路線（書籤）</summary>
+        <p class="hint" style="margin-bottom:8px">只貼網址時，轉換器只知道起點和終點，路線可能和 Google 不同。用這個書籤，會讀取 Google 的逐段指示，自動讓路線跟 Google 一致。</p>
+        <div class="row" style="margin-bottom:8px"><a class="btn primary" id="bmLink" href="#" title="把我拖到書籤列">送到 Bryton</a><span class="hint">← 把這個按鈕拖到 Chrome 書籤列</span></div>
+        <ol class="steps">
+          <li>電腦版 Google Maps 規劃路線（選單車或你要的交通方式）</li>
+          <li>在路線頁面按書籤列的「送到 Bryton」</li>
+          <li>轉換器會自動開啟並對齊，完成後顯示和 Google 相差幾公里</li>
+        </ol>
+      </details>
       <div class="drop" id="drop" tabindex="0" role="button">或選擇 / 拖曳 KML、KMZ、GPX 檔</div>
       <input type="file" id="file" accept=".kml,.kmz,.gpx" hidden multiple>
     </section>
@@ -589,6 +599,174 @@ $("go").onclick = async () => {
     setStatus(e instanceof UserError ? e.message : "讀取失敗，請確認網路連線與網址是否正確。", "err");
   } finally { setBusy(false); }
 };
+
+/* ============================== 對齊 Google 路線（書籤帶入） ============================== */
+// 由 build-bookmarklet.js 從 bookmarklet.src.js 產生，請勿手動修改
+const BOOKMARKLET = "javascript:(async()%3D%3E%7Bif(!%2F%5C%2Fmaps%5C%2Fdir%5C%2F%2F.test(location.href))return%20void%20alert(%22%E8%AB%8B%E5%85%88%E5%9C%A8%20Google%20Maps%20%E8%A6%8F%E5%8A%83%E5%A5%BD%E8%B7%AF%E7%B7%9A%EF%BC%88%E5%B7%A6%E5%81%B4%E9%A1%AF%E7%A4%BA%E8%B7%AF%E7%B7%9A%E7%9A%84%E9%A0%81%E9%9D%A2%EF%BC%89%EF%BC%8C%E5%86%8D%E6%8C%89%E9%80%99%E5%80%8B%E6%9B%B8%E7%B1%A4%E3%80%82%22)%3Bconst%20e%3Dwindow.open(%22about%3Ablank%22%2C%22_blank%22)%2Ct%3D%5B...document.querySelectorAll(%22button%22)%5D.find(e%3D%3E%2F%5E%5Cs*(%E8%A9%B3%E7%B4%B0%E8%B3%87%E6%96%99%7C%E8%AF%A6%E7%BB%86%E4%BF%A1%E6%81%AF%7CDetails)%5Cs*%24%2F.test(e.textContent))%3Bt%26%26(t.click()%2Cawait%20new%20Promise(e%3D%3EsetTimeout(e%2C2e3)))%3Bconst%20o%3Ddocument.body.innerText%2Cn%3Do.search(%2F%5C(%5Cs*%5B%5Cd.%2C%5D%2B%5Cs*(%E5%85%AC%E9%87%8C%7Ckm)%5Cs*%5C)%2F)%2Ci%3D%7Bv%3A1%2Cu%3Alocation.href%2Ct%3A(n%3E%3D0%3Fo.slice(n)%3Ao).slice(0%2C6e4)%7D%2Ca%3D%22https%3A%2F%2Fpigman1331.github.io%2Fbryton-route%2F%23g%3D%22%2Bbtoa(unescape(encodeURIComponent(JSON.stringify(i)))).replace(%2F%5C%2B%2Fg%2C%22-%22).replace(%2F%5C%2F%2Fg%2C%22_%22).replace(%2F%3D%2B%24%2F%2C%22%22)%3Be%3Fe.location.href%3Da%3Alocation.href%3Da%7D)()%3B";
+/** 解析 Google Maps「詳細資料」的逐段指示 → {total, steps:[{ks, len, text}]} */
+function parseGoogleSteps(text) {
+  const tm = text.match(/\(\s*([\d.,]+)\s*(公里|km)\s*\)/);
+  const total = tm ? parseFloat(tm[1].replace(/,/g, "")) : null;
+  const lines = text.split("\n").map(s => s.trim()).filter(Boolean);
+  let i0 = lines.findIndex(s => /^朝.+前進|^Head /.test(s));
+  if (i0 < 0) i0 = lines.findIndex(s => /^注意|^Caution/.test(s)) + 1;
+  const steps = []; let cum = 0;
+  const DIST = /^([\d.,]+)\s*(公里|公尺|km|m)$/;
+  const INSTR = /轉|進入|接著|靠|前進|沿|繼續|使用|迴轉|Turn|Continue|Head|Keep|Slight|Merge|Use/;
+  for (let i = Math.max(0, i0); i < lines.length; i++) {
+    const s = lines[i], d = s.match(DIST);
+    if (d) {
+      const v = parseFloat(d[1].replace(/,/g, "")), km = /公里|km/.test(d[2]) ? v : v / 1000;
+      if (steps.length) steps[steps.length - 1].len += km;
+      cum += km;
+      if (total && cum > total + 3) break;
+      continue;
+    }
+    if (INSTR.test(s) && s.length < 80) steps.push({ ks: cum, len: 0, text: s });
+  }
+  return { total, steps };
+}
+const SKIP_ROAD = /自行車道|堤外|專用道|縱貫公路|快速|高架|聯絡道|橋$|隧道|^台\d|縣道|鄉道/;
+function roadOf(text) {
+  const m = text.match(/(?:進入|接著走|沿著?|朝|往|走)\s*([^\s/，,、(（]+?(?:路|街|大道)(?:[一二三四五六七八九十]+段)?)/);
+  if (!m) return null;
+  const after = text.slice(m.index + m[0].length);
+  if (/^\d+\s*(巷|弄)/.test(after)) return null;          // 小巷弄不當錨點
+  const name = m[1].replace(/^(向[左右]急?轉|稍微靠[左右]|靠[左右]行駛|繼續)/, "");
+  if (name.length < 2 || SKIP_ROAD.test(name)) return null;
+  return name;
+}
+/** 從逐段指示挑出主要道路：長度 ≥ 1.2 km，彼此間隔 ≥ 4 km */
+function pickAnchors(steps) {
+  const cands = steps.map(s => ({ ...s, road: roadOf(s.text) })).filter(s => s.road && s.len >= 1.2);
+  const chosen = [];
+  for (const c of cands.sort((a, b) => b.len - a.len)) {
+    if (chosen.every(x => Math.abs((x.ks + x.len / 2) - (c.ks + c.len / 2)) >= 4)) chosen.push(c);
+  }
+  return chosen.sort((a, b) => a.ks - b.ks).slice(0, 30);
+}
+/** 用路名查座標，並依「距離上一點與終點的里程」挑出合理的那一條同名道路 */
+async function locateRoad(a, prev, end, total, extent) {
+  const url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=20&countryCode=TWN&outFields=Addr_type,Match_addr" +
+    "&searchExtent=" + extent.join(",") + "&SingleLine=" + encodeURIComponent(a.road);
+  let j; try { j = await fetchJSON(url, { timeout: 15000 }); } catch { return null; }
+  const kMid = a.ks + a.len / 2, R = total - a.ks;
+  let best = null, bestScore = Infinity;
+  for (const k of (j.candidates || [])) {
+    if (k.score < 80 || !/Street|PointAddress/.test(k.attributes.Addr_type || "")) continue;
+    const c = [k.location.y, k.location.x];
+    const dp = dist(prev.ll, c) / 1000, de = dist(c, end) / 1000;
+    if (dp > (a.ks + a.len - prev.km) + 2 || de > R + 2) continue;   // 直線距離不可能超過道路里程
+    const score = Math.abs(dp - (kMid - prev.km) * 0.85) + Math.abs(de - (total - kMid) * 0.85);
+    if (score < bestScore) { bestScore = score; best = c; }
+  }
+  return best;
+}
+function legKm(l) { let d = 0; for (let i = 1; i < l.length; i++) d += dist(l[i - 1], l[i]); return d / 1000; }
+function pointAlong(leg, meters, fromEnd) {
+  let acc = 0;
+  const seq = fromEnd ? leg.slice().reverse() : leg;
+  for (let i = 1; i < seq.length; i++) { acc += dist(seq[i - 1], seq[i]); if (acc >= meters) return seq[i]; }
+  return seq[seq.length - 1];
+}
+/** 書籤帶入的資料：對齊 Google 路線 */
+async function alignGoogle(payload) {
+  const prof = $("profile").value;
+  setBusy(true, "讀取 Google 路線…");
+  try {
+    const base = parseMapsUrl(payload.u);
+    if (base.some(p => p.q)) for (const p of base) if (p.q) { Object.assign(p, await geocode(p.q)); delete p.q; }
+    const { total, steps } = parseGoogleSteps(payload.t || "");
+    const start = base[0], end = base[base.length - 1];
+    const fixedVias = base.slice(1, -1).map(p => ({ ...p, fixed: true }));
+    let anchors = [];
+    if (total && steps.length) {
+      const picks = pickAnchors(steps);
+      const lats = [start.lat, end.lat], lngs = [start.lng, end.lng];
+      const pad = Math.max(0.15, (Math.max(...lats) - Math.min(...lats) + Math.max(...lngs) - Math.min(...lngs)) * 0.3);
+      const extent = [Math.min(...lngs) - pad, Math.min(...lats) - pad, Math.max(...lngs) + pad, Math.max(...lats) + pad].map(v => v.toFixed(4));
+      let prev = { ll: [start.lat, start.lng], km: 0 };
+      for (let i = 0; i < picks.length; i++) {
+        $("busy").textContent = `對照 Google 道路 ${i + 1}/${picks.length}…`;
+        const c = await locateRoad(picks[i], prev, [end.lat, end.lng], total, extent);
+        if (!c) continue;
+        anchors.push({ lat: c[0], lng: c[1], name: picks[i].road, gk: picks[i].ks, glen: picks[i].len });
+        prev = { ll: c, km: picks[i].ks + picks[i].len / 2 };
+      }
+    }
+    // 拖曳的途經點（網址裡有座標）插入最順的位置
+    let seq = [start, ...anchors, end];
+    let minPos = 1;
+    for (const v of fixedVias) {
+      let bj = minPos, bc = Infinity;
+      for (let j = minPos; j < seq.length; j++) {
+        const a = seq[j - 1], b = seq[j];
+        const c = dist([a.lat, a.lng], [v.lat, v.lng]) + dist([v.lat, v.lng], [b.lat, b.lng]) - dist([a.lat, a.lng], [b.lat, b.lng]);
+        if (c < bc) { bc = c; bj = j; }
+      }
+      seq.splice(bj, 0, v); minPos = bj + 1;
+    }
+    // 規劃
+    let done = 0;
+    $("busy").textContent = `規劃中 0/${seq.length - 1}…`;
+    let legs = await pool(2, seq.slice(0, -1).map((_, k) => k), async k => {
+      const r = await routeLeg(seq[k], seq[k + 1], prof); done++; $("busy").textContent = `規劃中 ${done}/${seq.length - 1}…`; return r;
+    });
+    const mergeAt = async i => {                // 移除 seq[i]，重算 i-1 → i+1
+      seq.splice(i, 1);
+      const leg = await routeLeg(seq[i - 1], seq[i], prof);
+      legs.splice(i - 1, 2, leg);
+    };
+    // 1) 移除造成折返的點
+    $("busy").textContent = "檢查折返…";
+    for (let i = seq.length - 2; i >= 1; i--) {
+      if (seq[i].fixed) continue;
+      const a = legs[i - 1], b = legs[i];
+      if (legKm(a) < 0.5 || legKm(b) < 0.5) continue;
+      if (dist(pointAlong(a, 400, true), pointAlong(b, 400, false)) < 150) await mergeAt(i);
+    }
+    // 2) 里程和 Google 對不上的點，由前往後逐一移除
+    for (let round = 0; round < 8; round++) {
+      let cum = 0, bad = -1;
+      for (let i = 1; i < seq.length - 1; i++) {
+        cum += legKm(legs[i - 1]);
+        const p = seq[i]; if (p.fixed || p.gk == null) continue;
+        const tol = Math.max(1.5, 0.04 * p.gk);
+        if (cum < p.gk - tol || cum > p.gk + p.glen + tol) { bad = i; break; }
+      }
+      if (bad < 0) break;
+      $("busy").textContent = "修正不符的路段…";
+      await mergeAt(bad);
+    }
+    state = { mode: "route", wps: seq.map(p => ({ lat: p.lat, lng: p.lng, name: p.name || null })), legs, track: null };
+    undoStack = []; $("undo").disabled = true;
+    const ours = legs.reduce((s, l) => s + legKm(l), 0);
+    $("urls").value = seq.map((p, i) => `${i === 0 ? "起點" : i === seq.length - 1 ? "終點" : (p.name || "途經")} ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`).join("\n");
+    store.set("urls", $("urls").value);
+    if (!$("name").value.trim()) $("name").value = autoName(base);
+    if (total) {
+      const diff = ours - total, pct = Math.abs(diff) / total * 100;
+      setStatus(`已對齊 Google 路線：Google ${total.toFixed(1)} km，轉換後 ${ours.toFixed(1)} km（差 ${diff >= 0 ? "+" : ""}${diff.toFixed(1)} km，${pct.toFixed(1)}%）。` +
+        (pct > 3 ? "差距偏大，請對照 Google 在地圖上點選修正。" : "可以直接下載。"), pct > 3 ? "warn" : "ok");
+    } else {
+      setStatus("沒有讀到 Google 的逐段指示，只用起終點規劃。請確認 Google Maps 左側有顯示路線後再按書籤。", "warn");
+    }
+    draw(true);
+  } catch (e) {
+    console.error(e);
+    setStatus(e instanceof UserError ? e.message : "對齊失敗，請確認網路連線後再按一次書籤。", "err");
+  } finally { setBusy(false); }
+}
+function readHashPayload() {
+  const m = location.hash.match(/^#g=([A-Za-z0-9_-]+)/);
+  if (!m) return null;
+  try {
+    const b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4))));
+    history.replaceState(null, "", location.pathname + location.search);
+    return JSON.parse(json);
+  } catch (e) { setStatus("書籤帶入的資料無法讀取，請再按一次書籤。", "err"); return null; }
+}
 function autoName(pts) {
   const a = pts[0].name, b = pts[pts.length - 1].name;
   if (a && b && a.length <= 12 && b.length <= 12) return `${a}-${b}`;
@@ -714,7 +892,14 @@ $("proxy").value = store.get("proxy", "");
 $("proxy").onchange = () => store.set("proxy", $("proxy").value.trim());
 $("urls").value = store.get("urls", "");
 $("profile").onchange = () => store.set("profile", $("profile").value);
+$("bmLink").href = BOOKMARKLET;
+$("bmLink").onclick = e => { e.preventDefault(); setStatus("請把「送到 Bryton」按鈕拖到 Chrome 書籤列，再到 Google Maps 路線頁面按它。", "warn"); };
 refreshPanel();
+(function () {
+  const p = readHashPayload();
+  if (p) { $("name").value = ""; alignGoogle(p); }
+  window.addEventListener("hashchange", () => { const q = readHashPayload(); if (q) { $("name").value = ""; alignGoogle(q); } });
+})();
 </script>
 </body>
 </html>
