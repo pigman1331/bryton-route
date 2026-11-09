@@ -646,7 +646,31 @@ function pickAnchors(steps) {
   for (const c of cands.sort((a, b) => b.len - a.len)) {
     if (chosen.every(x => Math.abs((x.ks + x.len / 2) - (c.ks + c.len / 2)) >= 4)) chosen.push(c);
   }
+  // 超過 12 km 沒有錨點的空檔：補上空檔內最長的有名道路（≥ 0.3 km）
+  const total = steps.length ? steps[steps.length - 1].ks + steps[steps.length - 1].len : 0;
+  const minor = steps.map(s => ({ ...s, road: roadOf(s.text) })).filter(s => s.road && s.len >= 0.3);
+  for (let pass = 0; pass < 3; pass++) {
+    const marks = [0, ...chosen.map(c => c.ks + c.len / 2).sort((a, b) => a - b), total];
+    let added = false;
+    for (let i = 1; i < marks.length; i++) {
+      if (marks[i] - marks[i - 1] <= 12) continue;
+      const fill = minor.filter(s => { const m = s.ks + s.len / 2; return m > marks[i - 1] + 3 && m < marks[i] - 3; })
+        .sort((a, b) => b.len - a.len)[0];
+      if (fill && !chosen.includes(fill)) { chosen.push(fill); added = true; }
+    }
+    if (!added) break;
+  }
   return chosen.sort((a, b) => a.ks - b.ks).slice(0, 30);
+}
+/** Google 這一段（km a → b）是否走自行車道／河濱 */
+const BIKEWAY = /自行車道|堤外|河濱|單車道|Cycleway|bike path/i;
+function bikewayBetween(steps, a, b) {
+  let km = 0;
+  for (const s of steps) {
+    const lo = Math.max(a, s.ks), hi = Math.min(b, s.ks + s.len);
+    if (hi > lo && BIKEWAY.test(s.text)) km += hi - lo;
+  }
+  return km;
 }
 /** 用路名查座標，並依「距離上一點與終點的里程」挑出合理的那一條同名道路 */
 async function locateRoad(a, prev, end, total, extent) {
@@ -709,15 +733,21 @@ async function alignGoogle(payload) {
       }
       seq.splice(bj, 0, v); minPos = bj + 1;
     }
-    // 規劃
+    // 規劃：Google 走自行車道／河濱的路段，改用偏好自行車道的設定
+    const gkOf = i => i === 0 ? 0 : i === seq.length - 1 ? (total || null) : (seq[i].gk != null ? seq[i].gk + seq[i].glen / 2 : null);
+    const legProf = k => {
+      const a = gkOf(k), b = gkOf(k + 1);
+      if (a == null || b == null || !steps.length) return prof;
+      return bikewayBetween(steps, a, b) > 0 ? (prof === "safety" ? "safety" : "trekking") : prof;
+    };
     let done = 0;
     $("busy").textContent = `規劃中 0/${seq.length - 1}…`;
     let legs = await pool(2, seq.slice(0, -1).map((_, k) => k), async k => {
-      const r = await routeLeg(seq[k], seq[k + 1], prof); done++; $("busy").textContent = `規劃中 ${done}/${seq.length - 1}…`; return r;
+      const r = await routeLeg(seq[k], seq[k + 1], legProf(k)); done++; $("busy").textContent = `規劃中 ${done}/${seq.length - 1}…`; return r;
     });
     const mergeAt = async i => {                // 移除 seq[i]，重算 i-1 → i+1
       seq.splice(i, 1);
-      const leg = await routeLeg(seq[i - 1], seq[i], prof);
+      const leg = await routeLeg(seq[i - 1], seq[i], legProf(i - 1));
       legs.splice(i - 1, 2, leg);
     };
     // 1) 移除造成折返的點
