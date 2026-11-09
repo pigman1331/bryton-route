@@ -672,6 +672,54 @@ function bikewayBetween(steps, a, b) {
   }
   return km;
 }
+/** 路名 → 範圍內所有同名道路的位置 */
+async function roadCandidates(road, extent) {
+  const url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=20&countryCode=TWN&outFields=Addr_type,Match_addr" +
+    "&searchExtent=" + extent.join(",") + "&SingleLine=" + encodeURIComponent(road);
+  try {
+    const j = await fetchJSON(url, { timeout: 15000 });
+    const out = [];
+    for (const k of (j.candidates || [])) {
+      if (k.score < 80 || !/Street|PointAddress/.test(k.attributes.Addr_type || "")) continue;
+      const c = [k.location.y, k.location.x];
+      if (!out.some(o => dist(o, c) < 300)) out.push(c);
+    }
+    return out;
+  } catch { return []; }
+}
+/** 整條路線一起比對：從所有同名道路的組合中，挑出「相鄰兩點直線距離 ≈ Google 該段里程 × 0.8」最吻合的一組；不合的點可以跳過 */
+function chooseAnchors(picks, cands, startLL, endLL, total) {
+  const RHO = 0.8, SKIP = 2.5;
+  const mid = p => p.ks + p.len / 2;
+  // 節點：0 = 起點；1..n = 各錨點的候選；最後 = 終點
+  const nodes = [{ i: -1, c: startLL, km: 0, maxKm: 0 }];
+  picks.forEach((p, i) => (cands[i] || []).forEach(c => nodes.push({ i, c, km: mid(p), lo: p.ks, hi: p.ks + p.len })));
+  nodes.push({ i: picks.length, c: endLL, km: total, lo: total, hi: total });
+  const cost = (a, b) => {
+    if (b.i <= a.i) return Infinity;
+    const d = dist(a.c, b.c) / 1000;
+    const gMax = (b.hi ?? b.km) - (a.lo ?? a.km), gMid = b.km - a.km;
+    if (gMax <= 0 || d > gMax + 2) return Infinity;            // 直線距離不可能比路還長
+    return Math.abs(d - RHO * gMid) + SKIP * (b.i - a.i - 1);   // 跳過中間的錨點要付出代價
+  };
+  const best = nodes.map(() => Infinity), from = nodes.map(() => -1);
+  best[0] = 0;
+  const order = nodes.map((n, k) => k).sort((x, y) => nodes[x].i - nodes[y].i);
+  for (const k of order) {
+    if (!isFinite(best[k])) continue;
+    for (let m = 0; m < nodes.length; m++) {
+      if (nodes[m].i <= nodes[k].i) continue;
+      const v = best[k] + cost(nodes[k], nodes[m]);
+      if (v < best[m]) { best[m] = v; from[m] = k; }
+    }
+  }
+  const out = [];
+  for (let k = from[nodes.length - 1]; k > 0; k = from[k]) {
+    const n = nodes[k], p = picks[n.i];
+    out.unshift({ lat: n.c[0], lng: n.c[1], name: p.road, gk: p.ks, glen: p.len });
+  }
+  return out;
+}
 /** 用路名查座標，並依「距離上一點與終點的里程」挑出合理的那一條同名道路 */
 async function locateRoad(a, prev, end, total, extent) {
   const url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=20&countryCode=TWN&outFields=Addr_type,Match_addr" +
@@ -712,14 +760,13 @@ async function alignGoogle(payload) {
       const lats = [start.lat, end.lat], lngs = [start.lng, end.lng];
       const pad = Math.max(0.15, (Math.max(...lats) - Math.min(...lats) + Math.max(...lngs) - Math.min(...lngs)) * 0.3);
       const extent = [Math.min(...lngs) - pad, Math.min(...lats) - pad, Math.max(...lngs) + pad, Math.max(...lats) + pad].map(v => v.toFixed(4));
-      let prev = { ll: [start.lat, start.lng], km: 0 };
+      const cands = [];
       for (let i = 0; i < picks.length; i++) {
-        $("busy").textContent = `對照 Google 道路 ${i + 1}/${picks.length}…`;
-        const c = await locateRoad(picks[i], prev, [end.lat, end.lng], total, extent);
-        if (!c) continue;
-        anchors.push({ lat: c[0], lng: c[1], name: picks[i].road, gk: picks[i].ks, glen: picks[i].len });
-        prev = { ll: c, km: picks[i].ks + picks[i].len / 2 };
+        $("busy").textContent = `查詢 Google 經過的道路 ${i + 1}/${picks.length}…`;
+        cands.push(await roadCandidates(picks[i].road, extent));
       }
+      $("busy").textContent = "比對道路位置…";
+      anchors = chooseAnchors(picks, cands, [start.lat, start.lng], [end.lat, end.lng], total);
     }
     // 拖曳的途經點（網址裡有座標）插入最順的位置
     let seq = [start, ...anchors, end];
