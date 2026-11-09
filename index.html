@@ -728,17 +728,25 @@ async function alignGoogle(payload) {
       if (legKm(a) < 0.5 || legKm(b) < 0.5) continue;
       if (dist(pointAlong(a, 400, true), pointAlong(b, 400, false)) < 150) await mergeAt(i);
     }
-    // 2) 里程和 Google 對不上的點，由前往後逐一移除
-    for (let round = 0; round < 8; round++) {
-      let cum = 0, bad = -1;
-      for (let i = 1; i < seq.length - 1; i++) {
-        cum += legKm(legs[i - 1]);
-        const p = seq[i]; if (p.fixed || p.gk == null) continue;
-        const tol = Math.max(1.5, 0.04 * p.gk);
-        if (cum < p.gk - tol || cum > p.gk + p.glen + tol) { bad = i; break; }
+    // 2) 兩個錨點之間繞遠路（比 Google 同一段長很多）→ 代表這個點的位置不對，移除
+    //    比 Google 短沒關係：Google 常走河濱自行車道，本來就比較長
+    for (let round = 0; round < 10; round++) {
+      let bad = -1, seg = 0, prevG = { gk: 0, glen: 0 };
+      for (let i = 1; i < seq.length; i++) {
+        seg += legKm(legs[i - 1]);
+        const p = seq[i];
+        if (i < seq.length - 1 && (p.fixed || p.gk == null)) continue;
+        const gEnd = i === seq.length - 1 ? (total || Infinity) : p.gk + p.glen;
+        const gMax = gEnd - prevG.gk;                        // Google 這一段最長可能的里程
+        if (i < seq.length - 1 && seg > gMax * 1.15 + 2) { bad = i; break; }
+        if (i === seq.length - 1 && total && seg > gMax * 1.15 + 2) { // 最後一段繞路：拿掉前一個錨點
+          for (let j = i - 1; j >= 1; j--) if (!seq[j].fixed && seq[j].gk != null) { bad = j; break; }
+          break;
+        }
+        prevG = p; seg = 0;
       }
       if (bad < 0) break;
-      $("busy").textContent = "修正不符的路段…";
+      $("busy").textContent = "修正繞路的路段…";
       await mergeAt(bad);
     }
     state = { mode: "route", wps: seq.map(p => ({ lat: p.lat, lng: p.lng, name: p.name || null })), legs, track: null };
