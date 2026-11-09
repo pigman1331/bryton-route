@@ -607,7 +607,8 @@ const BOOKMARKLET = "javascript:(async()%3D%3E%7Bif(!%2F%5C%2Fmaps%5C%2Fdir%5C%2
 function parseGoogleSteps(text) {
   const tm = text.match(/\(\s*([\d.,]+)\s*(公里|km)\s*\)/);
   const total = tm ? parseFloat(tm[1].replace(/,/g, "")) : null;
-  const lines = text.split("\n").map(s => s.trim()).filter(Boolean);
+  // Google 的補充說明行開頭常有圖示字元（不是一般空白），一律去掉開頭非文字的字元
+  const lines = text.split("\n").map(s => s.replace(/^[^\p{L}\p{N}]+/u, "").trim()).filter(Boolean);
   let i0 = lines.findIndex(s => /^朝.+前進|^Head /.test(s));
   if (i0 < 0) i0 = lines.findIndex(s => /^注意|^Caution/.test(s)) + 1;
   const steps = []; let cum = 0;
@@ -622,6 +623,8 @@ function parseGoogleSteps(text) {
       if (total && cum > total + 3) break;
       continue;
     }
+    // 「繼續開在 X 上」「經過…」是上一個指示的補充說明，不是新的一步
+    if (/^(繼續開在|繼續沿|經過|請牽|Continue to follow|Pass )/.test(s)) { if (steps.length) steps[steps.length - 1].text += " " + s; continue; }
     if (INSTR.test(s) && s.length < 80) steps.push({ ks: cum, len: 0, text: s });
   }
   return { total, steps };
