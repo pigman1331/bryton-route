@@ -162,10 +162,10 @@ details[open] summary{margin-bottom:8px}
     <details class="card">
       <summary>進階設定</summary>
       <label class="l" for="proxy">短網址展開服務（選填）</label>
-      <input type="text" id="proxy" placeholder="自架 Worker 網址，例：https://xxx.workers.dev/?url=">
-      <p class="hint">預設用公開服務展開 maps.app.goo.gl 短網址；不穩定時可填自己的服務。</p>
+      <input type="text" id="proxy" placeholder="其他 Worker 網址，例：https://xxx.workers.dev/?url=">
+      <p class="hint">預設使用本站的 Cloudflare Worker 展開 maps.app.goo.gl 短網址，通常不需要更改。</p>
     </details>
-    <p class="hint">規劃：BRouter／OSRM　地圖 © OpenStreetMap contributors</p>
+    <p class="hint">規劃：BRouter／OSRM　地址：Esri ArcGIS　地圖 © OpenStreetMap contributors</p>
   </aside>
 
   <main class="mapwrap">
@@ -255,19 +255,20 @@ function findMapsUrl(text) {
   const m = t.match(/https:\/\/www\.google\.[a-z.]+\/maps\/(?:dir|place|search)\/[^"'\s<>\\]+/);
   return m ? m[0] : null;
 }
-/** 展開 maps.app.goo.gl 短網址：瀏覽器不能直接讀跨站轉址，所以經由公開的轉接服務 */
+/** 展開 maps.app.goo.gl 短網址：瀏覽器不能直接讀跨站轉址，所以經由自架的 Cloudflare Worker */
+const EXPANDER = "https://bryton-maps.pigman1331.workers.dev/?url=";
 async function expandShort(url) {
   const enc = encodeURIComponent(url);
   const custom = $("proxy").value.trim();
-  const tries = [];
-  if (custom) tries.push(async () => {
-    const txt = await fetchText(custom.includes("{url}") ? custom.replace("{url}", enc) : custom + enc);
-    if (/^https?:\/\//.test(txt.trim()) && txt.trim().length < 4000) return txt.trim();
+  const viaText = async base => {
+    const txt = (await fetchText(base.includes("{url}") ? base.replace("{url}", enc) : base + enc, 20000)).trim();
+    if (txt.startsWith("{")) { const j = JSON.parse(txt); return j.url || null; }
+    if (/^https?:\/\//.test(txt) && txt.length < 4000) return txt;
     return findMapsUrl(txt);
-  });
-  tries.push(async () => { const j = await fetchJSON("https://api.allorigins.win/get?url=" + enc); return (j.status && /google\.[a-z.]+\/maps/.test(j.status.url || "")) ? j.status.url : findMapsUrl(j.contents); });
-  tries.push(async () => findMapsUrl(await fetchText("https://corsproxy.io/?url=" + enc)));
-  tries.push(async () => findMapsUrl(await fetchText("https://api.codetabs.com/v1/proxy/?quest=" + enc)));
+  };
+  const tries = [];
+  if (custom) tries.push(() => viaText(custom));
+  tries.push(() => viaText(EXPANDER));
   for (const f of tries) {
     try { const u = await f(); if (u && /google\.[a-z.]+\/maps/.test(u)) return u; } catch (e) { /* 換下一個 */ }
   }
@@ -346,12 +347,28 @@ function cleanPlaceName(s) {
   return t.length > 24 ? t.slice(0, 24) + "…" : t;
 }
 let lastGeo = 0;
+/** 地址查座標：先用 ArcGIS（台灣門牌準確），找不到再用 OpenStreetMap */
 async function geocode(q) {
   const base = q.replace(/^\d{3,6}/, "").trim();
-  const cands = [base];
   const mAddr = base.match(/^(.*?(?:號|号))(.+)$/);
-  if (mAddr) { cands.push(mAddr[1]); cands.push(mAddr[2]); }
   const town = base.match(/^(.{2,3}[縣市].{1,3}?[鄉鎮市區])/);
+  const arcQs = mAddr ? [mAddr[1], base] : [base];
+  if (town && mAddr) arcQs.push(town[1] + " " + mAddr[2]);
+  let rough = null;
+  for (const c of arcQs) {
+    try {
+      const j = await fetchJSON("https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=1&countryCode=TWN&outFields=Addr_type&SingleLine=" + encodeURIComponent(c), { timeout: 15000 });
+      const k = j.candidates && j.candidates[0];
+      if (!k) continue;
+      const exact = k.score >= 85 && /PointAddress|StreetAddress|POI|StreetInt/.test(k.attributes.Addr_type || "");
+      const hit = { lat: k.location.y, lng: k.location.x, approx: !exact };
+      if (exact) return hit;
+      if (!rough) rough = hit;
+    } catch (e) {}
+  }
+  if (rough) return rough;
+  const cands = [base];
+  if (mAddr) { cands.push(mAddr[1]); cands.push(mAddr[2]); }
   if (town && mAddr) cands.push(town[1] + " " + mAddr[2]);
   for (const c of [...new Set(cands)].filter(Boolean)) {
     const wait = 1100 - (Date.now() - lastGeo); if (wait > 0) await sleep(wait);
