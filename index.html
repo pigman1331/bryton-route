@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bryton 路線轉換器</title>
+<meta name="description" content="貼上 Google Maps 路線網址，轉成 Bryton 車機照線走、不會亂繞的 GPX 軌跡檔。">
+<meta name="theme-color" content="#E8541C">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23E8541C'/%3E%3Cpath d='M14 47 L24 30 L35 37 L43 19 L51 17' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='47' r='5' fill='%2322c55e' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='51' cy='17' r='5' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+/* 版面：左側操作欄（像車機的資料欄位）＋右側大地圖；手機改為上下堆疊 */
+:root{
+  --bg:#F3F2EF; --panel:#FFFFFF; --ink:#1C1F23; --muted:#68707A; --line:#E2E0DB;
+  --accent:#E8541C; --accent-ink:#FFFFFF; --accent-soft:#FDEBE3;
+  --ok:#15803D; --warn:#B45309; --err:#B91C1C; --start:#16A34A; --end:#DC2626; --via:#2563EB;
+  --field:#F7F6F3; --shadow:0 1px 2px rgba(28,31,35,.06),0 4px 16px rgba(28,31,35,.06);
+  --f-body:"Noto Sans TC",system-ui,-apple-system,"Microsoft JhengHei",sans-serif;
+  --f-data:"Barlow Semi Condensed","Noto Sans TC",system-ui,sans-serif;
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#15171A; --panel:#1E2125; --ink:#ECEDEE; --muted:#9AA1AA; --line:#2E3238;
+  --accent:#FF6A33; --accent-ink:#1A0D07; --accent-soft:#3A2218;
+  --ok:#4ADE80; --warn:#FBBF24; --err:#F87171; --field:#262A2F;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#15171A; --panel:#1E2125; --ink:#ECEDEE; --muted:#9AA1AA; --line:#2E3238;
+  --accent:#FF6A33; --accent-ink:#1A0D07; --accent-soft:#3A2218;
+  --ok:#4ADE80; --warn:#FBBF24; --err:#F87171; --field:#262A2F;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25); color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);-webkit-text-size-adjust:100%}
+button,input,select,textarea{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:400px 1fr;height:100%;min-height:0}
+.side{display:flex;flex-direction:column;gap:14px;overflow-y:auto;min-width:0;
+  padding-block:18px 24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:16px;border-right:1px solid var(--line);background:var(--bg)}
+.brand{display:flex;align-items:center;gap:10px}
+.brand svg{flex:none}
+.brand h1{margin:0;font:700 22px/1.2 var(--f-data);letter-spacing:.01em}
+.brand p{margin:0;color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
+.card h2{margin:0;font:600 13px/1.3 var(--f-body);letter-spacing:.06em;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>*{min-width:0}
+textarea,input[type=text],input[type=number],select{background:var(--field);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%}
+textarea{min-height:92px;resize:vertical;font-size:13px;line-height:1.5;word-break:break-all}
+textarea:focus,input:focus,select:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+label.l{font-size:13px;color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.grow{flex:1}
+.hint{font-size:12.5px;color:var(--muted);margin:0}
+.status{font-size:13px;margin:0;min-height:1.4em}
+.status.err{color:var(--err)} .status.ok{color:var(--ok)} .status.warn{color:var(--warn)}
+/* 車機資料欄位 */
+.fields{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.f{background:var(--panel);padding:8px 10px}
+.f b{display:block;font:700 28px/1.05 var(--f-data);font-variant-numeric:tabular-nums}
+.f span{font-size:11px;letter-spacing:.08em;color:var(--muted)}
+.pts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}
+.pts li{display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 6px;border-radius:6px;cursor:pointer}
+.pts li:hover{background:var(--field)}
+.pts .dot{flex:none;width:20px;height:20px;border-radius:50%;color:#fff;font:700 11px/20px var(--f-data);text-align:center}
+.pts .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pts .tag{font-size:11px;color:var(--warn)}
+.mapwrap{position:relative;min-width:0;min-height:0}
+#map{position:absolute;inset:0;background:var(--field)}
+.maptip{position:absolute;z-index:500;left:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));right:12px;pointer-events:none;display:flex;justify-content:center}
+.maptip span{pointer-events:auto;background:var(--panel);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;padding:6px 14px;font-size:12.5px;max-width:100%}
+.maptools{position:absolute;z-index:500;top:12px;right:calc(12px + env(safe-area-inset-right,0px));display:flex;gap:6px}
+.busy{position:absolute;z-index:600;top:12px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);border-radius:999px;padding:6px 16px;font-size:13px}
+.wp-icon{width:26px;height:26px;border-radius:50%;border:2.5px solid #fff;color:#fff;font:700 12px/21px var(--f-data);text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.leaflet-popup-content{font:13px/1.5 var(--f-body)}
+.leaflet-popup-content .btn{padding:4px 10px;font-size:12.5px;margin-top:6px}
+details summary{cursor:pointer;font-size:13px;color:var(--muted)}
+details[open] summary{margin-bottom:8px}
+.steps{margin:0;padding-left:20px;font-size:13px;display:flex;flex-direction:column;gap:4px}
+.drop{border:1.5px dashed var(--line);border-radius:8px;padding:10px;text-align:center;font-size:13px;color:var(--muted);cursor:pointer}
+.drop.on{border-color:var(--accent);background:var(--accent-soft)}
+.check{display:flex;gap:6px;align-items:center;font-size:13px}
+@media (max-width:860px){
+  html,body{height:auto}
+  .app{display:flex;flex-direction:column;gap:14px;height:auto;padding-block:16px 24px;
+    padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+  .side{display:contents}
+  .side>*{order:4}
+  .side>.brand{order:1}
+  .side>#cardIn{order:2}
+  .mapwrap{order:3;height:62vh;min-height:340px;border-radius:var(--r);overflow:hidden;border:1px solid var(--line)}
+  .maptip span{font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg width="38" height="38" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#E8541C"/><path d="M14 47 L24 30 L35 37 L43 19 L51 17" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="14" cy="47" r="5" fill="#22c55e" stroke="#fff" stroke-width="2"/><circle cx="51" cy="17" r="5" fill="#fff"/></svg>
+      <div><h1>Bryton 路線轉換器</h1><p>Google Maps 路線 → 車機照線走的 GPX</p></div>
+    </div>
+
+    <section class="card" id="cardIn" aria-labelledby="h-in">
+      <h2 id="h-in">1　貼上 Google Maps 網址</h2>
+      <textarea id="urls" placeholder="貼上路線網址，例如 https://maps.app.goo.gl/xxxx&#10;&#10;也可以一行一個、貼多個地點或路線，會依序串成一條（例如各補給點的分享連結）"></textarea>
+      <div class="row">
+        <select id="profile" aria-label="規劃偏好" style="flex:1">
+          <option value="fastbike">公路車（柏油路優先）</option>
+          <option value="trekking">一般自行車</option>
+          <option value="safety">安全優先（避開大馬路）</option>
+        </select>
+        <button class="btn primary" id="go">讀取路線</button>
+      </div>
+      <p class="status" id="status" role="status"></p>
+      <details>
+        <summary>怎麼複製 Google Maps 網址？</summary>
+        <ol class="steps">
+          <li>Google Maps 按「路線」，輸入起點、終點（起點不要用「你的位置」）</li>
+          <li>想走特定道路：拖曳藍色路線加入途經點</li>
+          <li>按「分享」→「複製連結」，貼到上面</li>
+          <li>點數不夠：分段分享，一行一個貼上；或讀取後直接在地圖上點選加點</li>
+        </ol>
+      </details>
+      <div class="drop" id="drop" tabindex="0" role="button">或選擇 / 拖曳 KML、KMZ、GPX 檔</div>
+      <input type="file" id="file" accept=".kml,.kmz,.gpx" hidden multiple>
+    </section>
+
+    <section class="card" aria-labelledby="h-rt">
+      <h2 id="h-rt">2　確認路線</h2>
+      <div class="fields">
+        <div class="f"><b id="sDist">—</b><span>距離 KM</span></div>
+        <div class="f"><b id="sAsc">—</b><span>爬升 M</span></div>
+        <div class="f"><b id="sPts">—</b><span>途經點</span></div>
+      </div>
+      <ul class="pts" id="pts"></ul>
+      <p class="hint" id="editHint">讀取後可在地圖上修正：點路線旁的道路加途經點、拖曳圓點移動、點圓點可刪除。</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-out">
+      <h2 id="h-out">3　存成 Bryton GPX</h2>
+      <div><label class="l" for="name">路線名稱（車機上顯示，也是檔名）</label><input type="text" id="name" placeholder="例：北高一日"></div>
+      <div class="row">
+        <div style="flex:1"><label class="l" for="spacing">最大點距（公尺）</label><input type="number" id="spacing" min="5" max="100" step="5" value="20"></div>
+        <label class="check" style="margin-top:20px"><input type="checkbox" id="reverse">反向</label>
+      </div>
+      <div class="row">
+        <button class="btn primary grow" id="dl" disabled>下載 GPX</button>
+        <button class="btn grow" id="share" disabled hidden>分享到 Bryton Active</button>
+      </div>
+      <p class="hint">匯入 Bryton Active 後，關閉「產生轉彎提示 (Turn-by-Turn)」，車機就會完全照線走。舊機型匯入失敗把點距改 40。</p>
+    </section>
+
+    <details class="card">
+      <summary>進階設定</summary>
+      <label class="l" for="proxy">短網址展開服務（選填）</label>
+      <input type="text" id="proxy" placeholder="自架 Worker 網址，例：https://xxx.workers.dev/?url=">
+      <p class="hint">預設用公開服務展開 maps.app.goo.gl 短網址；不穩定時可填自己的服務。</p>
+    </details>
+    <p class="hint">規劃：BRouter／OSRM　地圖 © OpenStreetMap contributors</p>
+  </aside>
+
+  <main class="mapwrap">
+    <div id="map" aria-label="路線地圖"></div>
+    <div class="maptools">
+      <button class="btn" id="undo" disabled title="復原 (Ctrl+Z)">↶ 復原</button>
+      <button class="btn" id="fit" title="顯示整條路線">全覽</button>
+    </div>
+    <div class="busy" id="busy" hidden>規劃中…</div>
+    <div class="maptip"><span id="tip">貼上 Google Maps 網址後按「讀取路線」</span></div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+"use strict";
+/* ============================== 工具 ============================== */
+const $ = id => document.getElementById(id);
+const R = 6371008.8;
+const toRad = d => d * Math.PI / 180;
+function dist(a, b) {
+  const la1 = toRad(a[0]), la2 = toRad(b[0]), dl = toRad(b[1] - a[1]);
+  const h = Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function clean(pts, gap = 1) { const o = []; for (const p of pts) if (!o.length || dist(o[o.length - 1], p) >= gap) o.push(p); return o; }
+function densify(pts, maxGap) {
+  if (pts.length < 2) return pts.slice();
+  const o = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], n = Math.ceil(dist(a, b) / maxGap);
+    for (let k = 1; k < n; k++) {
+      const t = k / n;
+      o.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+        (a[2] != null && b[2] != null) ? a[2] + (b[2] - a[2]) * t : null]);
+    }
+    o.push(b);
+  }
+  return o;
+}
+function stats(pts) {
+  let d = 0, gain = 0, base = null, hasE = false;
+  for (let i = 0; i < pts.length; i++) {
+    if (i) d += dist(pts[i - 1], pts[i]);
+    const e = pts[i][2];
+    if (e == null) continue;
+    hasE = true;
+    if (base == null) base = e;
+    else if (e - base > 3) { gain += e - base; base = e; }
+    else if (base - e > 3) base = e;
+  }
+  return { km: d / 1000, gain: hasE ? gain : null };
+}
+function concat(parts) {
+  const o = [];
+  for (const p of parts) {
+    if (!p || !p.length) continue;
+    const s = (o.length && dist(o[o.length - 1], p[0]) < 1) ? p.slice(1) : p;
+    for (const x of s) o.push(x);
+  }
+  return o;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("brc." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("brc." + k, JSON.stringify(v)); } catch {} }
+};
+class UserError extends Error {}
+
+/* ============================== Google Maps 網址 ============================== */
+const COORD = /^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/;
+
+async function fetchJSON(url, opt = {}) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), opt.timeout || 25000);
+  try { const r = await fetch(url, { signal: ctl.signal }); if (!r.ok) throw new Error("HTTP " + r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+async function fetchText(url, timeout = 25000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
+  try { const r = await fetch(url, { signal: ctl.signal }); if (!r.ok) throw new Error("HTTP " + r.status); return await r.text(); }
+  finally { clearTimeout(t); }
+}
+function findMapsUrl(text) {
+  if (!text) return null;
+  const t = text.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
+  const m = t.match(/https:\/\/www\.google\.[a-z.]+\/maps\/(?:dir|place|search)\/[^"'\s<>\\]+/);
+  return m ? m[0] : null;
+}
+/** 展開 maps.app.goo.gl 短網址：瀏覽器不能直接讀跨站轉址，所以經由公開的轉接服務 */
+async function expandShort(url) {
+  const enc = encodeURIComponent(url);
+  const custom = $("proxy").value.trim();
+  const tries = [];
+  if (custom) tries.push(async () => {
+    const txt = await fetchText(custom.includes("{url}") ? custom.replace("{url}", enc) : custom + enc);
+    if (/^https?:\/\//.test(txt.trim()) && txt.trim().length < 4000) return txt.trim();
+    return findMapsUrl(txt);
+  });
+  tries.push(async () => { const j = await fetchJSON("https://api.allorigins.win/get?url=" + enc); return (j.status && /google\.[a-z.]+\/maps/.test(j.status.url || "")) ? j.status.url : findMapsUrl(j.contents); });
+  tries.push(async () => findMapsUrl(await fetchText("https://corsproxy.io/?url=" + enc)));
+  tries.push(async () => findMapsUrl(await fetchText("https://api.codetabs.com/v1/proxy/?quest=" + enc)));
+  for (const f of tries) {
+    try { const u = await f(); if (u && /google\.[a-z.]+\/maps/.test(u)) return u; } catch (e) { /* 換下一個 */ }
+  }
+  throw new UserError("短網址無法自動展開。請用瀏覽器開啟這個連結，等地圖出現後複製網址列的完整網址貼上：\n" + url);
+}
+
+/** 解析一個 Google Maps 網址 → 依序的點 [{lat,lng,name,q}]；q 表示需要用地名查座標 */
+function parseMapsUrl(raw) {
+  let url;
+  try { url = decodeURIComponent(raw); } catch { url = raw; }
+  url = url.replace(/\+/g, " ");
+  const u = new URL(raw);
+  const qs = u.searchParams;
+  // 格式：/maps/dir/?api=1&origin=..&destination=..
+  if (qs.get("destination")) {
+    const stops = [];
+    if (qs.get("origin")) stops.push(qs.get("origin"));
+    if (qs.get("waypoints")) stops.push(...qs.get("waypoints").split("|"));
+    stops.push(qs.get("destination"));
+    if (stops.length < 2) throw new UserError("網址缺少起點，請把起點改成實際地點再分享。");
+    return stops.map(s => COORD.test(s) ? { lat: +s.match(COORD)[1], lng: +s.match(COORD)[2], name: null } : { q: s, name: s });
+  }
+  const dataPart = (url.split("/data=")[1] || "");
+  if (url.includes("/maps/dir/")) {
+    const parts = url.split("/maps/dir/")[1].split("/");
+    const stops = [];
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.startsWith("@")) continue;
+      if (p.startsWith("data=")) break;
+      if (p.startsWith("am=") || p.startsWith("?")) continue;
+      if (p.trim() === "") {
+        if (i === 0 && parts.length > 1) throw new UserError("路線起點是「你的位置」，網址裡沒有座標。請把起點改成實際地點再分享。");
+        continue;
+      }
+      stops.push(p.split("?")[0].trim());
+    }
+    if (stops.length < 2) throw new UserError("路線網址至少要有起點和終點。");
+    const pairs = [...dataPart.matchAll(/!1d(-?\d+\.\d+)!2d(-?\d+\.\d+)/g)].map(m => ({ lat: +m[2], lng: +m[1] }));
+    const named = stops.filter(s => !COORD.test(s));
+    if (named.length === stops.length && pairs.length === stops.length) {
+      return pairs.map((p, i) => ({ ...p, name: stops[i] }));
+    }
+    if (named.length === stops.length && pairs.length > stops.length) {
+      // 拖曳出的途經點也在 pairs 裡（順序正確），名稱只對應到命名的點
+      return pairs.map((p, i) => ({ ...p, name: i === 0 ? stops[0] : (i === pairs.length - 1 ? stops[stops.length - 1] : null) }));
+    }
+    let k = 0;
+    return stops.map(s => {
+      if (COORD.test(s)) { const m = s.match(COORD); return { lat: +m[1], lng: +m[2], name: null }; }
+      const p = pairs[k++];
+      return p ? { ...p, name: s } : { q: s, name: s };
+    });
+  }
+  if (url.includes("/maps/place/") || url.includes("/maps/search/")) {
+    const seg = url.split(/\/maps\/(?:place|search)\//)[1].split("/")[0].trim();
+    const m3 = dataPart.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+    const nm = cleanPlaceName(seg);
+    if (COORD.test(seg)) { const m = seg.match(COORD); return [{ lat: +m[1], lng: +m[2], name: null }]; }
+    if (m3) return [{ lat: +m3[1], lng: +m3[2], name: nm }];
+    const at = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (at) return [{ lat: +at[1], lng: +at[2], name: nm }];
+    return [{ q: seg, name: nm }];
+  }
+  const qv = qs.get("q") || qs.get("ll") || qs.get("query");
+  if (qv) return [COORD.test(qv) ? { lat: +qv.match(COORD)[1], lng: +qv.match(COORD)[2], name: null } : { q: qv, name: qv }];
+  const at = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (at) return [{ lat: +at[1], lng: +at[2], name: null }];
+  throw new UserError("看不懂這個網址：請貼 Google Maps 的「路線」或「地點」分享連結。");
+}
+function cleanPlaceName(s) {
+  // 「357苗栗縣通霄鎮新埔里中山路399號台灣中油（新埔站）」→ 取地址後面的名稱
+  let t = s.replace(/^\d{3,6}/, "");
+  const m = t.match(/(?:號|号)(.+)$/);
+  if (m && m[1].trim().length >= 2) return m[1].trim();
+  return t.length > 24 ? t.slice(0, 24) + "…" : t;
+}
+let lastGeo = 0;
+async function geocode(q) {
+  const base = q.replace(/^\d{3,6}/, "").trim();
+  const cands = [base];
+  const mAddr = base.match(/^(.*?(?:號|号))(.+)$/);
+  if (mAddr) { cands.push(mAddr[1]); cands.push(mAddr[2]); }
+  const town = base.match(/^(.{2,3}[縣市].{1,3}?[鄉鎮市區])/);
+  if (town && mAddr) cands.push(town[1] + " " + mAddr[2]);
+  for (const c of [...new Set(cands)].filter(Boolean)) {
+    const wait = 1100 - (Date.now() - lastGeo); if (wait > 0) await sleep(wait);
+    lastGeo = Date.now();
+    try {
+      const j = await fetchJSON("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=zh-TW&countrycodes=tw&q=" + encodeURIComponent(c));
+      if (j && j.length) return { lat: +j[0].lat, lng: +j[0].lon, approx: c !== base };
+    } catch (e) {}
+  }
+  throw new UserError(`找不到「${cleanPlaceName(q)}」的位置。請在 Google Maps 改用含座標的連結，或讀取後在地圖上手動加點。`);
+}
+
+/* ============================== 路線規劃 ============================== */
+async function routeLeg(a, b, profile) {
+  const ll = `${a.lng.toFixed(6)},${a.lat.toFixed(6)}|${b.lng.toFixed(6)},${b.lat.toFixed(6)}`;
+  try {
+    const j = await fetchJSON(`https://brouter.de/brouter?lonlats=${ll}&profile=${profile}&alternativeidx=0&format=geojson`, { timeout: 60000 });
+    const c = j.features[0].geometry.coordinates;
+    if (c.length >= 2) return c.map(x => [x[1], x[0], x.length > 2 ? x[2] : null]);
+  } catch (e) { /* 改用 OSRM */ }
+  const j = await fetchJSON(`https://routing.openstreetmap.de/routed-bike/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`, { timeout: 60000 });
+  if (!j.routes || !j.routes.length) throw new UserError("這兩點之間找不到自行車可走的路線。");
+  return j.routes[0].geometry.coordinates.map(x => [x[1], x[0], null]);
+}
+async function pool(n, items, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); }
+  }));
+  return out;
+}
+
+/* ============================== 狀態 ============================== */
+let state = { mode: null, wps: [], legs: [], track: null, name: "" };   // mode: "route"(可編輯) | "track"(檔案)
+let undoStack = [];
+let busy = false;
+const pushUndo = () => { undoStack.push(JSON.stringify({ wps: state.wps, legs: state.legs })); if (undoStack.length > 40) undoStack.shift(); $("undo").disabled = false; };
+function fullTrack() { return state.mode === "track" ? state.track : concat(state.legs); }
+
+/* ============================== 地圖 ============================== */
+const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([23.7, 120.95], 7);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+const lineLayer = L.layerGroup().addTo(map);
+const markLayer = L.layerGroup().addTo(map);
+
+function icon(color, label) {
+  return L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13], html: `<div class="wp-icon" style="background:${color}">${label}</div>` });
+}
+function draw(fit) {
+  lineLayer.clearLayers(); markLayer.clearLayers();
+  const css = getComputedStyle(document.documentElement);
+  const acc = css.getPropertyValue("--accent").trim() || "#E8541C";
+  const legs = state.mode === "track" ? [state.track] : state.legs;
+  legs.forEach((leg, i) => {
+    if (!leg || leg.length < 2) return;
+    const ll = leg.map(p => [p[0], p[1]]);
+    L.polyline(ll, { color: "#fff", weight: 9, opacity: .9, interactive: false }).addTo(lineLayer);
+    L.polyline(ll, { color: i % 2 ? "#C2410C" : acc, weight: 5, opacity: .95, interactive: false }).addTo(lineLayer);
+  });
+  if (state.mode === "route") {
+    const n = state.wps.length;
+    state.wps.forEach((w, i) => {
+      const [col, lab] = i === 0 ? ["#16A34A", "起"] : i === n - 1 ? ["#DC2626", "終"] : ["#2563EB", String(i)];
+      const m = L.marker([w.lat, w.lng], { icon: icon(col, lab), draggable: true, autoPan: true }).addTo(markLayer);
+      if (w.name) m.bindTooltip(w.name, { direction: "top", offset: [0, -12] });
+      const pop = document.createElement("div");
+      pop.innerHTML = `<b>${w.name ? escapeHtml(w.name) : (i === 0 ? "起點" : i === n - 1 ? "終點" : "途經點 " + i)}</b><br>${w.lat.toFixed(5)}, ${w.lng.toFixed(5)}${w.approx ? '<br><span style="color:var(--warn)">位置為推估，請確認</span>' : ""}<br>`;
+      if (n > 2) {
+        const b = document.createElement("button"); b.className = "btn"; b.textContent = "刪除這個點";
+        b.onclick = () => { map.closePopup(); removeWp(i); };
+        pop.appendChild(b);
+      }
+      m.bindPopup(pop);
+      m.on("dragend", e => { const p = e.target.getLatLng(); moveWp(i, p.lat, p.lng); });
+    });
+  } else if (state.mode === "track" && state.track.length) {
+    const a = state.track[0], b = state.track[state.track.length - 1];
+    L.marker([a[0], a[1]], { icon: icon("#16A34A", "起"), interactive: false }).addTo(markLayer);
+    L.marker([b[0], b[1]], { icon: icon("#DC2626", "終"), interactive: false }).addTo(markLayer);
+  }
+  if (fit) fitAll();
+  refreshPanel();
+}
+function fitAll() {
+  const t = fullTrack(); if (!t || t.length < 2) return;
+  map.fitBounds(L.latLngBounds(t.map(p => [p[0], p[1]])), { padding: [30, 30] });
+}
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+/* 點地圖：在最近的路段加途經點 */
+map.on("click", e => {
+  if (state.mode !== "route" || busy) return;
+  const p = e.latlng; let best = Infinity, bk = 0;
+  state.legs.forEach((leg, k) => {
+    const step = Math.max(1, Math.floor(leg.length / 600));
+    for (let i = 0; i < leg.length; i += step) {
+      const d = dist([p.lat, p.lng], leg[i]); if (d < best) { best = d; bk = k; }
+    }
+  });
+  pushUndo();
+  state.wps.splice(bk + 1, 0, { lat: p.lat, lng: p.lng, name: null });
+  state.legs.splice(bk, 1, null, null);
+  reroute(bk, bk + 2);
+});
+function moveWp(i, lat, lng) {
+  if (busy) { draw(); return; }
+  pushUndo();
+  state.wps[i] = { ...state.wps[i], lat, lng, approx: false };
+  reroute(Math.max(0, i - 1), Math.min(state.wps.length - 1, i + 1));
+}
+function removeWp(i) {
+  if (busy || state.wps.length <= 2) return;
+  pushUndo();
+  state.wps.splice(i, 1);
+  if (i === 0) { state.legs.splice(0, 1); draw(); return; }
+  if (i === state.wps.length) { state.legs.splice(i - 1, 1); draw(); return; }
+  state.legs.splice(i - 1, 2, null);
+  reroute(i - 1, i);
+}
+/** 只重新規劃途經點 i0..i1 之間的路段 */
+async function reroute(i0, i1) {
+  setBusy(true); draw();
+  const prof = $("profile").value;
+  try {
+    const pairs = []; for (let k = i0; k < i1; k++) pairs.push(k);
+    const res = await pool(2, pairs, k => routeLeg(state.wps[k], state.wps[k + 1], prof));
+    pairs.forEach((k, j) => state.legs[k] = res[j]);
+    setStatus("", "");
+  } catch (e) {
+    setStatus(e instanceof UserError ? e.message : "規劃失敗，請確認網路連線後再試一次。", "err");
+    doUndo();
+  } finally { setBusy(false); draw(); }
+}
+function doUndo() {
+  if (busy || !undoStack.length) return;
+  const s = JSON.parse(undoStack.pop()); state.wps = s.wps; state.legs = s.legs;
+  $("undo").disabled = !undoStack.length; draw();
+}
+$("undo").onclick = doUndo;
+$("fit").onclick = fitAll;
+document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "z" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); doUndo(); } });
+
+/* ============================== 讀取 ============================== */
+function setStatus(msg, cls) { const s = $("status"); s.textContent = msg; s.className = "status" + (cls ? " " + cls : ""); }
+function setBusy(b, text) { busy = b; $("busy").hidden = !b; $("busy").textContent = text || "規劃中…"; $("go").disabled = b; refreshPanel(); }
+
+$("go").onclick = async () => {
+  const lines = $("urls").value.split(/\s+/).map(s => s.trim()).filter(s => /^https?:\/\//i.test(s));
+  if (!lines.length) { setStatus("請先貼上 Google Maps 的分享網址。", "err"); return; }
+  store.set("urls", $("urls").value); store.set("profile", $("profile").value);
+  setBusy(true, "讀取網址…");
+  try {
+    let pts = [];
+    const missing = [];
+    for (let i = 0; i < lines.length; i++) {
+      let u = lines[i];
+      setStatus(`讀取第 ${i + 1}/${lines.length} 個網址…`, "");
+      if (/\/\/(maps\.app\.goo\.gl|goo\.gl|g\.co)\//i.test(u)) u = await expandShort(u);
+      const got = parseMapsUrl(u);
+      for (const p of got) {
+        if (p.q) {
+          setStatus(`查詢「${p.name}」的位置…`, "");
+          try { Object.assign(p, await geocode(p.q)); delete p.q; }
+          catch (e) { if (got.length === 1) { missing.push(p.name); continue; } throw e; }
+        }
+        const last = pts[pts.length - 1];
+        if (last && dist([last.lat, last.lng], [p.lat, p.lng]) < 80) { if (!last.name && p.name) last.name = p.name; continue; }
+        pts.push(p);
+      }
+    }
+    if (pts.length < 2) throw new UserError("至少需要兩個點（起點和終點）。只貼了一個地點的話，請再貼下一個地點或路線。");
+    setBusy(true, `規劃 ${pts.length - 1} 段路線…`);
+    setStatus(`規劃中（${pts.length - 1} 段）…`, "");
+    const prof = $("profile").value;
+    let done = 0;
+    const legs = await pool(2, pts.slice(0, -1).map((_, k) => k), async k => {
+      const r = await routeLeg(pts[k], pts[k + 1], prof);
+      done++; $("busy").textContent = `規劃中 ${done}/${pts.length - 1}…`;
+      return r;
+    });
+    state = { mode: "route", wps: pts, legs, track: null };
+    undoStack = []; $("undo").disabled = true;
+    if (!$("name").value.trim()) $("name").value = autoName(pts);
+    const approx = pts.filter(p => p.approx).length;
+    const warns = [];
+    if (missing.length) warns.push(`找不到 ${missing.map(s => "「" + s + "」").join("、")} 的位置，已略過，請在地圖上該處點一下補上`);
+    if (approx) warns.push(`有 ${approx} 個點是用地名推估位置，請在地圖上確認`);
+    setStatus(warns.length ? "完成。" + warns.join("；") + "。" : "完成。對照 Google Maps 確認路線，不對的地方直接在地圖上點選修正。", warns.length ? "warn" : "ok");
+    draw(true);
+  } catch (e) {
+    console.error(e);
+    setStatus(e instanceof UserError ? e.message : "讀取失敗，請確認網路連線與網址是否正確。", "err");
+  } finally { setBusy(false); }
+};
+function autoName(pts) {
+  const a = pts[0].name, b = pts[pts.length - 1].name;
+  if (a && b && a.length <= 12 && b.length <= 12) return `${a}-${b}`;
+  return b && b.length <= 16 ? `往${b}` : "Google路線";
+}
+
+/* ---------- 檔案 ---------- */
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("on"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("on"); }));
+drop.addEventListener("drop", e => loadFiles(e.dataTransfer.files));
+$("file").onchange = e => { loadFiles(e.target.files); e.target.value = ""; };
+async function loadFiles(files) {
+  const f = files && files[0]; if (!f) return;
+  try {
+    let text, name = f.name.replace(/\.(kml|kmz|gpx)$/i, "");
+    if (/\.kmz$/i.test(f.name)) {
+      const zip = await JSZip.loadAsync(f);
+      const k = Object.keys(zip.files).find(n => /\.kml$/i.test(n));
+      if (!k) throw new UserError("KMZ 裡找不到 KML。");
+      text = await zip.files[k].async("string");
+    } else text = await f.text();
+    const doc = new DOMParser().parseFromString(text, "application/xml");
+    let pts = [];
+    if (/\.gpx$/i.test(f.name)) {
+      const pick = tag => [...doc.getElementsByTagName(tag)].map(el => { const e = el.getElementsByTagName("ele")[0]; return [+el.getAttribute("lat"), +el.getAttribute("lon"), e ? +e.textContent : null]; });
+      pts = pick("trkpt"); if (pts.length < 2) pts = pick("rtept");
+      const nm = doc.querySelector("trk > name, metadata > name, rte > name"); if (nm && nm.textContent.trim()) name = nm.textContent.trim();
+    } else {
+      const segs = [...doc.getElementsByTagName("LineString")].map(ls => {
+        const c = ls.getElementsByTagName("coordinates")[0];
+        return c ? c.textContent.trim().split(/\s+/).map(t => t.split(",").map(Number)).filter(v => v.length >= 2 && !isNaN(v[0])).map(v => [v[1], v[0], v[2] ? v[2] : null]) : [];
+      }).filter(s => s.length >= 2);
+      if (!segs.length) throw new UserError("KML 裡找不到路線。");
+      pts = segs[0].slice();
+      for (let s of segs.slice(1)) {
+        if (dist(pts[pts.length - 1], s[s.length - 1]) < dist(pts[pts.length - 1], s[0])) s = s.slice().reverse();
+        pts.push(...s);
+      }
+      const nm = doc.querySelector("Document > name"); if (nm && nm.textContent.trim()) name = nm.textContent.trim();
+    }
+    if (pts.length < 2) throw new UserError("檔案裡沒有路線點。");
+    state = { mode: "track", wps: [], legs: [], track: pts };
+    undoStack = []; $("undo").disabled = true;
+    $("name").value = name;
+    setStatus(`已讀取 ${f.name}。檔案路線無法在地圖上編輯，可直接存檔。`, "ok");
+    draw(true);
+  } catch (e) {
+    setStatus(e instanceof UserError ? e.message : "檔案讀取失敗：" + e.message, "err");
+  }
+}
+
+/* ============================== 面板 ============================== */
+function refreshPanel() {
+  const t = fullTrack(); const ok = !!(t && t.length >= 2) && !busy && (state.mode !== "route" || state.legs.every(l => l && l.length));
+  const st = t && t.length >= 2 ? stats(t) : null;
+  $("sDist").textContent = st ? st.km.toFixed(1) : "—";
+  $("sAsc").textContent = st && st.gain != null ? Math.round(st.gain) : "—";
+  $("sPts").textContent = state.mode === "route" ? Math.max(0, state.wps.length - 2) : "—";
+  $("dl").disabled = !ok; $("share").disabled = !ok;
+  const ul = $("pts"); ul.innerHTML = "";
+  if (state.mode === "route") {
+    const n = state.wps.length;
+    state.wps.forEach((w, i) => {
+      if (!w.name && i !== 0 && i !== n - 1) return;
+      const li = document.createElement("li");
+      const col = i === 0 ? "#16A34A" : i === n - 1 ? "#DC2626" : "#2563EB";
+      li.innerHTML = `<span class="dot" style="background:${col}">${i === 0 ? "起" : i === n - 1 ? "終" : i}</span><span class="nm"></span>${w.approx ? '<span class="tag">位置推估</span>' : ""}`;
+      li.querySelector(".nm").textContent = w.name || (i === 0 ? "起點" : "終點");
+      li.onclick = () => map.setView([w.lat, w.lng], Math.max(map.getZoom(), 15));
+      ul.appendChild(li);
+    });
+  }
+  $("editHint").hidden = state.mode === "track";
+  $("tip").textContent = state.mode === "route" ? "點道路＝加點 · 拖曳圓點＝移動 · 點圓點＝刪除"
+    : state.mode === "track" ? "檔案路線（固定形狀）" : "貼上 Google Maps 網址後按「讀取路線」";
+}
+
+/* ============================== 輸出 ============================== */
+function buildGpx() {
+  let pts = clean(fullTrack());
+  if ($("reverse").checked) pts = pts.slice().reverse();
+  const sp = Math.max(5, Math.min(100, +$("spacing").value || 20));
+  pts = densify(pts, sp);
+  const name = ($("name").value.trim() || "route");
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+    '<gpx version="1.1" creator="Bryton Route Converter (web)" xmlns="http://www.topografix.com/GPX/1/1">',
+    `  <metadata><name>${esc(name)}</name></metadata>`,
+    `  <trk><name>${esc(name)}</name><type>cycling</type><trkseg>`];
+  for (const p of pts) lines.push(p[2] == null ? `    <trkpt lat="${p[0].toFixed(7)}" lon="${p[1].toFixed(7)}"/>`
+    : `    <trkpt lat="${p[0].toFixed(7)}" lon="${p[1].toFixed(7)}"><ele>${p[2].toFixed(1)}</ele></trkpt>`);
+  lines.push("  </trkseg></trk>", "</gpx>", "");
+  const fname = name.replace(/[\\/:*?"<>|]+/g, "_").trim() + ".gpx";
+  return { blob: new Blob([lines.join("\n")], { type: "application/gpx+xml" }), fname, n: pts.length };
+}
+$("dl").onclick = () => {
+  const { blob, fname, n } = buildGpx();
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  setStatus(`已下載 ${fname}（${n} 點）。`, "ok");
+  store.set("spacing", $("spacing").value);
+};
+(function setupShare() {
+  try {
+    const f = new File(["x"], "t.gpx", { type: "application/gpx+xml" });
+    if (navigator.canShare && navigator.canShare({ files: [f] })) $("share").hidden = false;
+  } catch {}
+})();
+$("share").onclick = async () => {
+  const { blob, fname } = buildGpx();
+  try { await navigator.share({ files: [new File([blob], fname, { type: "application/gpx+xml" })], title: fname }); }
+  catch (e) { if (e.name !== "AbortError") setStatus("無法分享，請改用「下載 GPX」。", "err"); }
+};
+
+/* ============================== 初始化 ============================== */
+$("profile").value = store.get("profile", "fastbike");
+$("spacing").value = store.get("spacing", "20");
+$("proxy").value = store.get("proxy", "");
+$("proxy").onchange = () => store.set("proxy", $("proxy").value.trim());
+$("urls").value = store.get("urls", "");
+$("profile").onchange = () => store.set("profile", $("profile").value);
+refreshPanel();
+</script>
+</body>
+</html>
